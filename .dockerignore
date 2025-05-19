@@ -1,0 +1,26 @@
+# Ignore node_modules (if using Node.js)
+node_modules/
+
+# Ignore build artifacts
+dist/
+build/
+*.egg-info/
+
+# Ignore OS files
+.DS_Store
+Thumbs.db
+
+# Ignore git files
+.git
+.gitignore
+
+# Ignore Docker files
+Dockerfile
+.dockerignore
+
+# Ignore logs
+*.log
+
+# Ignore environment files
+.env
+.env.*
