@@ -54,13 +54,38 @@ export default class Transcoder {
 			return null;
 		}
 
-		const parsed = {
+		return {
 			file,
 			filename,
 			extname,
 		};
+	}
 
-		return parsed;
+	static async detectVideoResolution(path: string): Promise<Resolutions> {
+		return new Promise((resolve, reject) => {
+			ffmpeg(path).ffprobe((err, data) => {
+				if (err) {
+					return reject(err);
+				}
+
+				const { width, height } =
+					data.streams.find((stream) => stream.codec_type === "video") ?? {};
+
+				if (!width || !height) {
+					return reject(new Error("Could not detect video resolution"));
+				}
+
+				const resolution = Object.entries(RESOLUTIONS).find(
+					([, { width: w, height: h }]) => w === width && h === height
+				);
+
+				resolve(
+					resolution
+						? (resolution[0] as unknown as Resolutions)
+						: Resolutions["P720"]
+				);
+			});
+		});
 	}
 
 	kill() {
@@ -79,8 +104,10 @@ export default class Transcoder {
 
 		const item = this.#source;
 
+		// Got the output folder name from the filename
 		const outputFolder = this.#getOutputFolder(item.filename);
 
+		// make the output folder
 		await mkdir(outputFolder, { recursive: true });
 
 		const success = await this.#transcodeResolutions(item, outputFolder);
@@ -92,42 +119,35 @@ export default class Transcoder {
 		console.log(`[finished]: ${done.length} file(s) successfully processed`);
 	}
 
-	async #transcodeResolutions(
-		{ file, filename, extname }: TranscoderSource,
-		outputFolder: string
-	) {
+	async #transcodeResolutions(source: TranscoderSource, outputFolder: string) {
 		if (!this.#resolutions.length) return true;
 
 		const resolutionPlaylists: TranscoderPlaylist[] = [];
 
 		for (const resolution of this.#resolutions) {
-			console.log(`[started]: processing ${resolution}p for ${filename}`);
+			console.log(
+				`[started]: processing ${resolution}p for ${source.filename}`
+			);
 			logger.step({
 				index: 1,
 				process: `Transcoding ${resolution}p`,
-				file,
+				file: source.file,
 			});
 
-			const playlist = await this.#transcode(
-				{
-					file,
-					filename,
-					extname,
-				},
-				resolution,
-				outputFolder
-			);
+			const playlist = await this.#transcode(source, resolution, outputFolder);
 
 			if (!playlist) {
 				console.log(
-					`[skipping]: ${resolution}p for ${filename}; no playlist returned`
+					`[skipping]: ${resolution}p for ${source.filename}; no playlist returned`
 				);
 				continue;
 			}
 
 			resolutionPlaylists.push(playlist);
 
-			console.log(`[completed]: processing ${resolution}p for ${filename}`);
+			console.log(
+				`[completed]: processing ${resolution}p for ${source.filename}`
+			);
 		}
 
 		return this.#buildMainPlaylist(resolutionPlaylists, outputFolder);
