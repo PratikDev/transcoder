@@ -1,5 +1,5 @@
 # Use official Golang base image
-FROM golang:1.24 as builder
+FROM golang:1.24 AS builder
 
 # Set working directory
 WORKDIR /app
@@ -11,7 +11,7 @@ RUN apt-get update && \
   rm -rf /var/lib/apt/lists/*
 
 # Copy go mod files
-COPY go.mod go.sum ./
+COPY go.mod ./
 
 # Download dependencies
 RUN go mod download
@@ -36,8 +36,8 @@ RUN apt-get update && \
 # Copy the built binary from builder
 COPY --from=builder /app/transcoder .
 
-# Expose port
-EXPOSE 3000
+# Copy assets directory
+COPY assets ./assets
 
 # Run the Go app
 CMD ["./transcoder"]

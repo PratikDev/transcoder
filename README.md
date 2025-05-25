@@ -7,11 +7,9 @@ Running this project locally requeires a few steps:
 3. Run the following command to build and run the Docker container:
 
 ```bash
-# Build the Docker image
 docker build -t transcoder .
 ```
 
 ```bash
-# Run the Docker container
 docker run transcoder
 ```
