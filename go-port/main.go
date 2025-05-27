@@ -14,10 +14,9 @@ func main() {
 		Filename: "video.mp4",
 		Extname:  "mp4",
 	}
-	resolutions := []types.Resolutions{720, 480, 360}
 	outputDir := "./output"
 
-	transcoder := services.NewTranscoder(source, resolutions, outputDir)
+	transcoder := services.NewTranscoder(source, outputDir)
 
 	// Record the start time
 	startTime := time.Now()

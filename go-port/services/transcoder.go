@@ -23,7 +23,19 @@ type Transcoder struct {
 }
 
 // NewTranscoder creates a new Transcoder instance.
-func NewTranscoder(source types.TranscoderSource, resolutions []types.Resolutions, output string) *Transcoder {
+func NewTranscoder(source types.TranscoderSource, output string) *Transcoder {
+	vidResolution, err := utils.DetectVideoResolution(source.File)
+	if err != nil {
+		log.Printf("[error]: failed to detect video resolution for %s: %v", source.File, err)
+		return nil
+	}
+
+	resolutions := utils.GetAvailableResolutions(vidResolution)
+	if len(resolutions) == 0 {
+		log.Printf("[error]: no valid resolutions found for %s", source.File)
+		return nil
+	}
+
 	return &Transcoder{
 		source:      source,
 		resolutions: resolutions,

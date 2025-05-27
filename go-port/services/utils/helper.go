@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -74,4 +75,65 @@ func DetectPlaylistResolution(playlistPath string) (types.ResolutionPreset, erro
 	}
 
 	return types.ResolutionPreset{Width: width, Height: height}, nil
+}
+
+// DetectVideoResolution uses ffprobe to detect the resolution of a video file.
+func DetectVideoResolution(path string) (types.Resolutions, error) {
+	cmd := exec.Command("ffprobe",
+		"-v", "error",
+		"-select_streams", "v:0",
+		"-show_entries", "stream=width,height,codec_type",
+		"-of", "json",
+		path,
+	)
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	if err != nil {
+		return 0, fmt.Errorf("ffprobe command failed: %w, stderr: %s", err, stderr.String())
+	}
+
+	var result types.FFProbeOutput
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		return 0, fmt.Errorf("failed to parse ffprobe output: %w", err)
+	}
+
+	var width, height int
+	for _, stream := range result.Streams {
+		if stream.CodecType == "video" {
+			width = stream.Width
+			height = stream.Height
+			break
+		}
+	}
+
+	if width == 0 || height == 0 {
+		return 0, fmt.Errorf("could not detect video resolution for %s", path)
+	}
+
+	// Find the closest matching resolution in our predefined map
+	for resEnum, preset := range types.RESOLUTIONS {
+		if preset.Width == width && preset.Height == height {
+			return resEnum, nil
+		}
+	}
+
+	// Default to P720 if no exact match is found
+	log.Printf("No exact resolution match found for %dx%d. Defaulting to P720.", width, height)
+	return types.P720, nil
+}
+
+// GetAvailableResolutions returns a list of available resolutions that are less than or equal to the provided resolution.
+// It filters out resolutions that have a width or height of 0.
+func GetAvailableResolutions(resolution types.Resolutions) []types.Resolutions {
+	availableResolutions := []types.Resolutions{}
+	for res, preset := range types.RESOLUTIONS {
+		if res <= resolution && preset.Width > 0 && preset.Height > 0 {
+			availableResolutions = append(availableResolutions, res)
+		}
+	}
+	return availableResolutions
 }
