@@ -14,7 +14,7 @@ import (
 
 // GetFilenameLessExt returns the filename without its extension.
 func GetFilenameLessExt(fileName string) string {
-	return strings.TrimSuffix(fileName, filepath.Ext(fileName))
+	return strings.TrimSuffix(fileName, strings.ToLower(filepath.Ext(fileName)))
 }
 
 // GetOutputFolderName constructs the output folder path based on the output directory and the filename without extension.

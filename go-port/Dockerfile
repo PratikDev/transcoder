@@ -36,8 +36,11 @@ RUN apt-get update && \
 # Copy the built binary from builder
 COPY --from=builder /app/transcoder .
 
-# Copy assets directory
-COPY assets ./assets
+# Create necessary directories at runtime
+RUN mkdir -p /app/uploads /app/output
+
+# Expose the API port
+EXPOSE 3000
 
 # Run the Go app
 CMD ["./transcoder"]
