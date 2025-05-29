@@ -22,8 +22,5 @@ COPY . .
 # Build the Bun app
 RUN bun build src/index.ts --compile --outfile transcoder
 
-# Expose port
-EXPOSE 3000
-
 # Run your Bun app
 CMD ["./transcoder"]

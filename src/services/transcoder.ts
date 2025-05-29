@@ -1,65 +1,46 @@
-import ffmpeg, { FfmpegCommand } from "fluent-ffmpeg";
+import ffmpeg from "fluent-ffmpeg";
 import { mkdir, writeFile } from "node:fs/promises";
 
-import {
-	ALLOWED_EXTENSION,
-	Resolutions,
-	RESOLUTIONS,
-} from "@/constant/transcoder";
-import type {
-	TranscoderOptions,
-	TranscoderPlaylist,
-	TranscoderSource,
-} from "@/types/transcoder";
-import logger from "./logger";
+export type TranscoderSource = {
+	file: string;
+	filename: string;
+	extname: string;
+};
+
+export type TranscoderPlaylist = {
+	resolution: { width: number; height: number };
+	bitrate: number;
+	playlistFilename: string;
+	playlistPathFromMain: string;
+	playlistPath: string;
+};
+
+export enum Resolutions {
+	"P2160" = 2160,
+	"P1440" = 1440,
+	"P1080" = 1080,
+	"P720" = 720,
+	"P480" = 480,
+	"P360" = 360,
+}
+
+export const RESOLUTIONS = new Map([
+	[Resolutions.P2160, { height: 2160, width: 3840, bitrate: 14_000 }],
+	[Resolutions.P1440, { height: 1440, width: 2560, bitrate: 9_000 }],
+	[Resolutions.P1080, { height: 1080, width: 1920, bitrate: 6_500 }],
+	[Resolutions.P720, { height: 720, width: 1280, bitrate: 4_000 }],
+	[Resolutions.P480, { height: 480, width: 854, bitrate: 2_000 }],
+	[Resolutions.P360, { height: 360, width: 640, bitrate: 1_000 }],
+]);
 
 export default class Transcoder {
-	static resolutions = RESOLUTIONS;
-
-	#command: FfmpegCommand | null = null;
 	#source: TranscoderSource = {
-		file: "",
-		filename: "",
-		extname: "",
+		file: "./assets/video.mp4",
+		filename: "video.mp4",
+		extname: "mp4",
 	};
-	#resolutions: Resolutions[] = [];
-	#output: string;
-	#includeWebp: boolean;
-
-	constructor({ source, resolutions, output, includeWebp }: TranscoderOptions) {
-		this.#source = source;
-		this.#resolutions = resolutions;
-		this.#output = output;
-		this.#includeWebp = includeWebp;
-	}
-
-	static parseResolutions(arg: string) {
-		const parsed: Resolutions[] = [];
-		const args = arg.split(",");
-
-		for (const value of Object.values(Resolutions)) {
-			const resolution = args.find((a) => a == value);
-			if (resolution) parsed.push(value as Resolutions);
-		}
-
-		return parsed;
-	}
-
-	static parseSourceFile(file: string): TranscoderSource | null {
-		const filename = file.split("/").pop() as string;
-		const extname = filename.split(".").pop() as string;
-
-		if (!ALLOWED_EXTENSION.includes(extname)) {
-			console.error(`unsupported file type, file will be skipped: ${file}`);
-			return null;
-		}
-
-		return {
-			file,
-			filename,
-			extname,
-		};
-	}
+	#resolutions: Resolutions[] = [720, 480, 360];
+	#output: string = "./output";
 
 	static async detectVideoResolution(path: string): Promise<Resolutions> {
 		return new Promise((resolve, reject) => {
@@ -88,54 +69,35 @@ export default class Transcoder {
 		});
 	}
 
-	kill() {
-		if (!this.#command) {
-			console.log("[skipped]: no ffmpeg process to kill");
-			return;
-		}
-
-		this.#command.kill("SIGTERM");
-
-		console.log("[killed]: ffmpeg process");
-	}
-
 	async process() {
-		const done: string[] = [];
-
 		const item = this.#source;
 
-		// Got the output folder name from the filename
-		const outputFolder = this.#getOutputFolder(item.filename);
+		// Got the output folder name from the file and output dir name
+		const outputFolder = `${this.#output}/${item.filename.split(".").shift()}`;
 
 		// make the output folder
 		await mkdir(outputFolder, { recursive: true });
 
 		const success = await this.#transcodeResolutions(item, outputFolder);
+		if (!success) {
+			console.log(`[failed]: transcoding for ${item.filename} failed`);
+			return;
+		}
 
-		if (success) done.push(item.file);
-
-		await this.#generateAnimatedWebp(item, outputFolder);
-
-		console.log(`[finished]: ${done.length} file(s) successfully processed`);
+		console.log(
+			`[finished]: ${
+				item.filename
+			} file successfully processed for ${this.#resolutions.join(
+				", "
+			)} resolutions`
+		);
 	}
 
 	async #transcodeResolutions(source: TranscoderSource, outputFolder: string) {
-		if (!this.#resolutions.length) return true;
-
 		const resolutionPlaylists: TranscoderPlaylist[] = [];
 
 		for (const resolution of this.#resolutions) {
-			console.log(
-				`[started]: processing ${resolution}p for ${source.filename}`
-			);
-			logger.step({
-				index: 1,
-				process: `Transcoding ${resolution}p`,
-				file: source.file,
-			});
-
 			const playlist = await this.#transcode(source, resolution, outputFolder);
-
 			if (!playlist) {
 				console.log(
 					`[skipping]: ${resolution}p for ${source.filename}; no playlist returned`
@@ -144,10 +106,6 @@ export default class Transcoder {
 			}
 
 			resolutionPlaylists.push(playlist);
-
-			console.log(
-				`[completed]: processing ${resolution}p for ${source.filename}`
-			);
 		}
 
 		return this.#buildMainPlaylist(resolutionPlaylists, outputFolder);
@@ -158,14 +116,8 @@ export default class Transcoder {
 		resolution: Resolutions,
 		outputFolder: string
 	): Promise<TranscoderPlaylist | null> {
-		const resolutionOutput = `${outputFolder}/${resolution}p`;
-		const filenameLessExt = filename.split(".").shift() as string;
-		const outputFilenameLessExt = `${filenameLessExt}_${resolution}`;
-		const outputPlaylist = `${resolutionOutput}/${outputFilenameLessExt}p.m3u8`;
-		const outputSegment = `${resolutionOutput}/${outputFilenameLessExt}_%03d.ts`;
-		const outputPlaylisFromMain = `${resolution}p/${outputFilenameLessExt}p.m3u8`;
+		// Validate the resolution
 		const { height, bitrate } = RESOLUTIONS.get(resolution) ?? {};
-
 		if (!height || !bitrate) {
 			console.error(
 				`[argument error]: Invalid resolution provided: ${resolution}`
@@ -173,13 +125,20 @@ export default class Transcoder {
 			return null;
 		}
 
+		const resolutionOutput = `${outputFolder}/${resolution}p`;
+		const filenameLessExt = filename.split(".").shift() as string;
+		const outputFilenameLessExt = `${filenameLessExt}_${resolution}`;
+		const outputPlaylist = `${resolutionOutput}/${outputFilenameLessExt}p.m3u8`;
+		const outputSegment = `${resolutionOutput}/${outputFilenameLessExt}_%03d.ts`;
+		const outputPlaylisFromMain = `${resolution}p/${outputFilenameLessExt}p.m3u8`;
+
 		await mkdir(resolutionOutput, { recursive: true });
 
 		return new Promise((resolve) => {
-			this.#command = ffmpeg(decodeURI(file))
+			ffmpeg(decodeURI(file))
 				.output(outputPlaylist)
 				.videoCodec("libx264")
-				// .videoBitrate(`${bitrate}k`)
+				.videoBitrate(`${bitrate}k`)
 				.audioCodec("aac")
 				.audioBitrate("148k")
 				.outputOptions([
@@ -195,98 +154,35 @@ export default class Transcoder {
 					"vod",
 					"-hls_segment_filename",
 					outputSegment,
-				]);
-
-			this.#command.on("progress", (progress) => {
-				logger.progress({ file, percent: progress.percent });
-				console.log(
-					`[progress]: ${progress.percent?.toFixed(2)}% @ frame ${
-						progress.frames
-					}; timemark ${progress.timemark}`
-				);
-			});
-
-			this.#command.on("start", () => {
-				console.log(`[started]: transcoding ${resolution}p for ${filename}`);
-				logger.progress({ file, percent: 0 });
-			});
-
-			this.#command.on("end", async () => {
-				console.log(
-					`[completed]: transcoding ${resolution}p for ${filename}; output ${outputPlaylist}`
-				);
-				logger.progress({ file, percent: 100 });
-				resolve({
-					resolution: await this.#detectPlaylistResolution(outputPlaylist),
-					playlistFilename: outputPlaylist.split("/").pop() as string,
-					playlistPathFromMain: outputPlaylisFromMain,
-					playlistPath: outputPlaylist,
-					bitrate,
-				});
-			});
-
-			this.#command.on("error", (err) =>
-				this.#onFfmpegError(file, err, resolve)
-			);
-			this.#command.run();
+				])
+				.on("start", () => {
+					console.log(`[started]: transcoding ${resolution}p for ${filename}`);
+				})
+				.on("progress", (progress) => {
+					console.log(
+						`[progress]: ${progress.percent?.toFixed(2)}% @ frame ${
+							progress.frames
+						}; timemark ${progress.timemark}`
+					);
+				})
+				.on("end", async () => {
+					console.log(
+						`[completed]: transcoding ${resolution}p for ${filename}; output ${outputPlaylist}`
+					);
+					resolve({
+						resolution: await this.#detectPlaylistResolution(outputPlaylist),
+						playlistFilename: outputPlaylist.split("/").pop() as string,
+						playlistPathFromMain: outputPlaylisFromMain,
+						playlistPath: outputPlaylist,
+						bitrate,
+					});
+				})
+				.on("error", (err) => {
+					console.error(`[ffmpeg error]: ${err.message}`);
+					resolve(null);
+				})
+				.run();
 		});
-	}
-
-	async #generateAnimatedWebp(
-		{ file, filename }: TranscoderSource,
-		outputFolder: string
-	): Promise<string | null> {
-		if (!this.#includeWebp) return null;
-
-		const output = `${outputFolder}/video.webp`;
-		const duration = await this.#detectVideoDuration(file);
-
-		logger.step({ index: 3, process: `Generating Animated WebP`, file });
-
-		return new Promise((resolve) => {
-			this.#command = ffmpeg(decodeURI(file))
-				.output(output)
-				.videoCodec("libwebp")
-				.videoFilter(`fps=30, scale=320:-1`)
-				.setStartTime(duration > 30 ? 10 : 0)
-				.duration(6)
-				.outputOptions(["-preset", "picture", "-loop", "0", "-an"]);
-
-			this.#command.on("progress", (progress) => {
-				// get percentage done from progress timemark in format HH:MM:SS.000 compared to duration
-				const percent = (Number(progress.timemark.split(":").pop()) / 6) * 100;
-				logger.progress({ file, percent });
-				console.log(
-					`[progress]: ${percent?.toFixed(2)}% @ frame ${
-						progress.frames
-					}; timemark ${progress.timemark}`
-				);
-			});
-
-			this.#command.on("start", () => {
-				console.log(`[started]: generating animated webp for ${filename}`);
-				logger.progress({ file, percent: 0 });
-			});
-
-			this.#command.on("end", async () => {
-				logger.progress({ file, percent: 100 });
-				console.log(
-					`[completed]: generating animated webp for ${filename}; output ${output}`
-				);
-				resolve(output);
-			});
-
-			this.#command.on("error", (err) =>
-				this.#onFfmpegError(file, err, resolve)
-			);
-			this.#command.run();
-		});
-	}
-
-	#onFfmpegError(file: string, err: Error, resolve: (value: null) => void) {
-		logger.progress({ file, percent: -1 });
-		console.error(`[ffmpeg error]: ${err.message}`);
-		resolve(null);
 	}
 
 	async #buildMainPlaylist(
@@ -348,29 +244,5 @@ export default class Transcoder {
 				resolve({ width, height });
 			});
 		});
-	}
-
-	async #detectVideoDuration(path: string): Promise<number> {
-		return new Promise((resolve, reject) => {
-			ffmpeg(path).ffprobe((err, data) => {
-				if (err) {
-					return reject(err);
-				}
-
-				const { duration } =
-					data.streams.find((stream) => stream.codec_type === "video") ?? {};
-
-				if (!duration) {
-					return reject(new Error("Could not detect playlist resolution"));
-				}
-
-				resolve(Number(duration));
-			});
-		});
-	}
-
-	#getOutputFolder(filename: string) {
-		const filenameLessExt = filename.split(".").shift() as string;
-		return `${this.#output}/${filenameLessExt}`;
 	}
 }
