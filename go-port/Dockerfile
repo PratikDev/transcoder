@@ -11,7 +11,7 @@ RUN apt-get update && \
   rm -rf /var/lib/apt/lists/*
 
 # Copy go mod files
-COPY go.mod ./
+COPY go.mod go.sum ./
 
 # Download dependencies
 RUN go mod download

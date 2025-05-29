@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/PratikDev/transcoder/services"
 	"github.com/PratikDev/transcoder/types"
+	"github.com/google/uuid"
 )
 
 const (
@@ -21,6 +23,15 @@ const (
 	maxUploadSize     = 20          // Maximum upload size in MB
 	fileFormFieldName = "video"
 )
+
+var (
+	statusManager *services.StatusManager
+)
+
+func init() {
+	// Initialize the global status manager when the program starts
+	statusManager = services.NewStatusManager()
+}
 
 func main() {
 	// Create upload and output directories if they don't exist
@@ -32,6 +43,8 @@ func main() {
 	}
 
 	http.HandleFunc("/transcode", handleTranscode)
+	http.HandleFunc("/transcode/status/", handleTranscodeStatusStream) // SSE endpoint
+	http.HandleFunc("/status", handleServerStatus)                     // Optional: for checking server health
 
 	log.Printf("Server starting on port %s", serverPort)
 	log.Fatal(http.ListenAndServe(serverPort, nil))
@@ -71,14 +84,15 @@ func handleTranscode(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Failed to create temp file: %v", err), http.StatusInternalServerError)
 		return
 	}
-	defer dst.Close()             // Close the file after writing
-	defer os.Remove(tempFilePath) // Clean up temp file after processing
+	defer dst.Close() // Close the file after writing
 	if _, err := io.Copy(dst, file); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to save file: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	log.Printf("Received file: %s, saved to %s", fileName, tempFilePath)
+	taskID := uuid.New().String()
+
+	log.Printf("Received file: %s, saved to %s. Assigned Task ID: %s", fileName, tempFilePath, taskID)
 
 	// Prepare TranscoderSource
 	source := types.TranscoderSource{
@@ -87,15 +101,104 @@ func handleTranscode(w http.ResponseWriter, r *http.Request) {
 		Extname:  extName,
 	}
 
-	log.Printf("Starting transcoding for %s...", fileName)
-	startTime := time.Now()
+	// Initiate transcoding in a goroutine (non-blocking)
+	go func() {
+		// This defer ensures the temp file is removed after the goroutine finishes,
+		// regardless of whether transcoding succeeded or failed.
+		defer func() {
+			if err := os.Remove(tempFilePath); err != nil {
+				log.Printf("[%s] Error removing temporary file %s: %v", taskID, tempFilePath, err)
+			} else {
+				log.Printf("[%s] Successfully removed temporary file: %s", taskID, tempFilePath)
+			}
 
-	// Initiate Transcoding
-	transcoder := services.NewTranscoder(source, outputDir)
-	transcoder.Process()
+			// Remove the task from StatusManager when it's completely done
+			statusManager.RemoveTask(taskID)
+		}()
 
-	elapsedTime := time.Since(startTime)
-	log.Printf("Transcoding for %s completed. Total time: %s", fileName, elapsedTime)
+		log.Printf("[%s] Starting transcoding for %s in background...", taskID, fileName)
+		startTime := time.Now()
 
+		transcoder := services.NewTranscoder(source, outputDir, statusManager, taskID)
+		transcoder.Process()
+
+		elapsedTime := time.Since(startTime)
+		log.Printf("[%s] Transcoding for %s completed. Total time: %s", taskID, fileName, elapsedTime)
+	}()
+
+	response := map[string]any{
+		"message":         fmt.Sprintf("Transcoding of %s started successfully.", fileName),
+		"taskId":          taskID,
+		"statusStreamUrl": fmt.Sprintf("/transcode/status/%s", taskID),
+	}
+	w.WriteHeader(http.StatusAccepted) // 202 Accepted means processing has started
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func handleTranscodeStatusStream(w http.ResponseWriter, r *http.Request) {
+	// Extract taskID from the URL path
+	taskID := strings.TrimPrefix(r.URL.Path, "/transcode/status/")
+	if taskID == "" {
+		http.Error(w, "Task ID is required", http.StatusBadRequest)
+		return
+	}
+
+	log.Printf("Client connected to status stream for Task ID: %s", taskID)
+
+	// Set headers for Server-Sent Events
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*") // TODO: Set CORS policy
+
+	// Register the client with the StatusManager to receive updates
+	clientChan, err := statusManager.RegisterSubscriber(taskID)
+	if err != nil {
+		log.Printf("Error registering subscriber for task %s: %v", taskID, err)
+		http.Error(w, "Could not subscribe to task status", http.StatusInternalServerError)
+		return
+	}
+	// Deregister the client when this handler function returns
+	defer statusManager.DeregisterSubscriber(taskID, clientChan)
+
+	// Keep the connection open and send updates
+	for {
+		select {
+		case update := <-clientChan:
+			// Marshal the update struct to JSON
+			jsonData, err := json.Marshal(update)
+			if err != nil {
+				log.Printf("[%s] Error marshalling status update: %v", taskID, err)
+				continue // Skip this update, but keep connection alive
+			}
+
+			// Send as an SSE event
+			_, err = fmt.Fprintf(w, "%s\n", jsonData)
+			if err != nil {
+				// Client disconnected or network error
+				log.Printf("[%s] Client disconnected or write error: %v", taskID, err)
+				return // Exit the loop and close handler
+			}
+
+			// Flush the response writer to send the data immediately
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+
+		case <-r.Context().Done():
+			// Client disconnected
+			log.Printf("[%s] Client connection closed.", taskID)
+			return // Exit the loop and close handler
+		}
+	}
+}
+
+func handleServerStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		http.Error(w, "Only GET requests are allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	w.WriteHeader(http.StatusOK)
+	fmt.Fprint(w, "Transcoder API is running!")
 }

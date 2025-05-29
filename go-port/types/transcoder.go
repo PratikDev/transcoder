@@ -54,15 +54,6 @@ func (r Resolutions) String() string {
 	return fmt.Sprintf("%dP", int(r))
 }
 
-// converts a Resolutions enum to a Resolution struct.
-func (r Resolutions) ToResolution() (ResolutionPreset, bool) {
-	preset, ok := RESOLUTIONS[r]
-	if !ok {
-		return ResolutionPreset{}, false
-	}
-	return ResolutionPreset{Width: preset.Width, Height: preset.Height, Bitrate: preset.Bitrate}, true
-}
-
 // FFProbeStream represents a single stream in the FFProbe output.
 type FFProbeStream struct {
 	CodecType string `json:"codec_type"`

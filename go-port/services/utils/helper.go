@@ -7,6 +7,7 @@ import (
 	"log"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/PratikDev/transcoder/types"
@@ -126,9 +127,31 @@ func DetectVideoResolution(path string) (types.Resolutions, error) {
 	return types.P720, nil
 }
 
-// GetAvailableResolutions returns a list of available resolutions that are less than or equal to the provided resolution.
+// DetectInputDuration uses ffprobe to get the duration of the input video.
+func DetectInputDuration(path string) (float64, error) {
+	cmd := exec.Command("ffprobe",
+		"-v", "error",
+		"-show_entries", "format=duration",
+		"-of", "default=noprint_wrappers=1:nokey=1",
+		path,
+	)
+
+	output, err := cmd.Output()
+	if err != nil {
+		return 0, fmt.Errorf("failed to detect input duration: %w", err)
+	}
+
+	durationStr := strings.TrimSpace(string(output))
+	duration, err := strconv.ParseFloat(durationStr, 64)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse input duration '%s': %w", durationStr, err)
+	}
+	return duration, nil
+}
+
+// GetTargetResolutions returns a list of available resolutions that are less than or equal to the provided resolution.
 // It filters out resolutions that have a width or height of 0.
-func GetAvailableResolutions(resolution types.Resolutions) []types.Resolutions {
+func GetTargetResolutions(resolution types.Resolutions) []types.Resolutions {
 	availableResolutions := []types.Resolutions{}
 	for res, preset := range types.RESOLUTIONS {
 		if res <= resolution && preset.Width > 0 && preset.Height > 0 {
