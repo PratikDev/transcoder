@@ -10,7 +10,7 @@ It provides a RESTful API to accept video files and streams the transcoding prog
 - [x] Automatically transcodes the video to all lower resolutions in descending order.
 - [x] Streams the transcoding progress to the client using Server-Sent Events (SSE).
 - [x] Disconnects the SSE stream when the transcoding is completed.
-- [ ] User shouldn't be able to connect to non-existent task IDs.
+- [x] User shouldn't be able to connect to non-existent task IDs.
 - [ ] Supports multiple subscribers to the same transcoding job.
 - [ ] Endpoint to cancel a transcoding job.
 - [ ] Way to retrieve the transcoded video files.

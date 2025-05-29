@@ -155,8 +155,6 @@ func handleTranscodeStatusStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Client connected to status stream for Task ID: %s", taskID)
-
 	// Set headers for Server-Sent Events
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -166,10 +164,16 @@ func handleTranscodeStatusStream(w http.ResponseWriter, r *http.Request) {
 	// Register the client with the StatusManager to receive updates
 	clientChan, err := statusManager.RegisterSubscriber(taskID)
 	if err != nil {
+		// Error occurred during registration, likely task not found or not active.
 		log.Printf("Error registering subscriber for task %s: %v", taskID, err)
-		http.Error(w, "Could not subscribe to task status. The task may have already completed or failed to start.", http.StatusInternalServerError)
+		// Respond with HTTP 404 Not Found if the task is not found or not active.
+		http.Error(w, fmt.Sprintf("Cannot subscribe to task status: %s. Task not found, not active, or already completed.", taskID), http.StatusNotFound)
 		return
 	}
+
+	// Log the successful subscription
+	log.Printf("Client connected to status stream for Task ID: %s", taskID)
+
 	// Deregister the client when this handler function returns
 	defer statusManager.DeregisterSubscriber(taskID, clientChan)
 

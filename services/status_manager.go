@@ -2,6 +2,7 @@ package services
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -30,6 +31,17 @@ func (sm *StatusManager) RegisterSubscriber(taskID string) (chan types.StatusUpd
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
+	// Check if the task is active and known.
+	// A task is considered active if it exists in the sm.tasks map.
+	// SendUpdate adds tasks to sm.tasks, and RemoveTask deletes them.
+	currentStatus, taskExists := sm.tasks[taskID]
+	if !taskExists {
+		// If task is not in sm.tasks, it means it hasn't received its first update,
+		// has already completed and been removed, or never existed.
+		log.Printf("Attempt to subscribe to non-existent or inactive task: %s", taskID)
+		return nil, fmt.Errorf("task '%s' not found or not active", taskID)
+	}
+
 	// Initialize subscriber map for this taskID if it doesn't exist
 	if _, ok := sm.subscribers[taskID]; !ok {
 		sm.subscribers[taskID] = make(map[chan types.StatusUpdate]struct{})
@@ -38,18 +50,16 @@ func (sm *StatusManager) RegisterSubscriber(taskID string) (chan types.StatusUpd
 	// Create a buffered channel to prevent blocking the sender if the receiver is slow
 	// Buffer size can be tuned. A small buffer prevents excessive buffering.
 	clientChan := make(chan types.StatusUpdate, 5) // Buffer 5 updates
-
 	sm.subscribers[taskID][clientChan] = struct{}{}
 	log.Printf("New subscriber registered for task: %s", taskID)
 
 	// Send the last known status immediately to the new subscriber
-	if status, ok := sm.tasks[taskID]; ok {
-		select {
-		case clientChan <- status.LastUpdate:
-			// Sent successfully
-		default:
-			log.Printf("Failed to send initial status to a slow subscriber for task: %s", taskID)
-		}
+	// We already fetched currentStatus and know taskExists is true.
+	select {
+	case clientChan <- currentStatus.LastUpdate:
+		// Sent successfully
+	default:
+		log.Printf("Failed to send initial status to a new subscriber for task: %s (channel: %p). Channel might be full or closed.", taskID, clientChan)
 	}
 
 	return clientChan, nil
