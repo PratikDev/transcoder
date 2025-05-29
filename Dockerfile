@@ -1,5 +1,5 @@
-# Use official Bun base image
-FROM oven/bun:1.2.4
+# Use official Golang base image
+FROM golang:1.24 AS builder
 
 # Set working directory
 WORKDIR /app
@@ -10,17 +10,37 @@ RUN apt-get update && \
   apt-get clean && \
   rm -rf /var/lib/apt/lists/*
 
-# Copy package files
-COPY bun.lock package.json ./
+# Copy go mod files
+COPY go.mod go.sum ./
 
-# Install dependencies
-RUN bun install --frozen-lockfile
+# Download dependencies
+RUN go mod download
 
 # Copy the rest of the project files
 COPY . .
 
-# Build the Bun app
-RUN bun build src/index.ts --compile --outfile transcoder
+# Build the Go app
+RUN go build -o transcoder .
 
-# Run your Bun app
+# Use a minimal image for running
+FROM debian:bookworm-slim
+
+WORKDIR /app
+
+# Install ffmpeg runtime
+RUN apt-get update && \
+  apt-get install -y ffmpeg && \
+  apt-get clean && \
+  rm -rf /var/lib/apt/lists/*
+
+# Copy the built binary from builder
+COPY --from=builder /app/transcoder .
+
+# Create necessary directories at runtime
+RUN mkdir -p /app/uploads /app/output
+
+# Expose the API port
+EXPOSE 3000
+
+# Run the Go app
 CMD ["./transcoder"]

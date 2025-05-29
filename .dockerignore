@@ -24,6 +24,3 @@ Dockerfile
 # Ignore environment files
 .env
 .env.*
-
-# Ignore Go port
-/go-port
