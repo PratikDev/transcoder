@@ -107,7 +107,7 @@ func (t *Transcoder) transcodeResolutions(outputFolder string) bool {
 				mu.Lock()
 				errorOccurred = true
 				mu.Unlock()
-				t.statusMgr.SendUpdate(t.taskID, types.StatusUpdate{Type: "progress", Message: fmt.Sprintf("Skipping %s: %v", res.String(), err)})
+				t.statusMgr.SendUpdate(t.taskID, types.StatusUpdate{Type: "failed", Message: fmt.Sprintf("Skipping %s: %v", res.String(), err)})
 				return
 			}
 
@@ -174,7 +174,7 @@ func (t *Transcoder) transcode(
 	cmd := exec.Command("ffmpeg", args...)
 
 	log.Printf("[started]: transcoding %s for %s", resolution.String(), t.source.Filename)
-	t.statusMgr.SendUpdate(t.taskID, types.StatusUpdate{Type: "progress", Message: fmt.Sprintf("Starting %s transcoding...", resolution.String())})
+	t.statusMgr.SendUpdate(t.taskID, types.StatusUpdate{Type: "started", Message: fmt.Sprintf("Started %s transcoding", resolution.String())})
 
 	// Capture stderr to a pipe for progress logging
 	stderrPipe, err := cmd.StderrPipe()
@@ -230,7 +230,7 @@ func (t *Transcoder) transcode(
 
 	err = cmd.Start()
 	if err != nil {
-		t.statusMgr.SendUpdate(t.taskID, types.StatusUpdate{Type: "progress", Message: fmt.Sprintf("Failed to start %s command: %v", resolution.String(), err)})
+		t.statusMgr.SendUpdate(t.taskID, types.StatusUpdate{Type: "failed", Message: fmt.Sprintf("Failed to start %s command: %v", resolution.String(), err)})
 		return nil, fmt.Errorf("failed to start ffmpeg command: %w", err)
 	}
 
@@ -245,11 +245,11 @@ func (t *Transcoder) transcode(
 	}
 
 	log.Printf("[completed]: transcoding %s for %s; output %s", resolution.String(), t.source.Filename, outputPlaylist)
-	t.statusMgr.SendUpdate(t.taskID, types.StatusUpdate{Type: "progress", Message: fmt.Sprintf("Completed %s output generation.", resolution.String())})
+	t.statusMgr.SendUpdate(t.taskID, types.StatusUpdate{Type: "completed", Message: fmt.Sprintf("Completed %s output generation.", resolution.String())})
 
 	detectedRes, err := utils.DetectPlaylistResolution(outputPlaylist)
 	if err != nil {
-		t.statusMgr.SendUpdate(t.taskID, types.StatusUpdate{Type: "progress", Message: fmt.Sprintf("Failed to detect playlist resolution for %s: %v", resolution.String(), err)})
+		t.statusMgr.SendUpdate(t.taskID, types.StatusUpdate{Type: "failed", Message: fmt.Sprintf("Failed to detect playlist resolution for %s: %v", resolution.String(), err)})
 		return nil, fmt.Errorf("failed to detect playlist resolution for %s: %w", outputPlaylist, err)
 	}
 
@@ -265,7 +265,7 @@ func (t *Transcoder) transcode(
 func (t *Transcoder) buildMainPlaylist(playlists []types.TranscoderPlaylist, outputFolder string) bool {
 	if len(playlists) == 0 {
 		log.Printf("[skipping]: main playlist for %s; no resolution playlists found", outputFolder)
-		t.statusMgr.SendUpdate(t.taskID, types.StatusUpdate{Type: "progress", Message: "Skipping main playlist: no resolutions transcoded."})
+		t.statusMgr.SendUpdate(t.taskID, types.StatusUpdate{Type: "failed", Message: "Skipping main playlist: no resolutions transcoded."})
 		return false
 	}
 
@@ -292,6 +292,6 @@ func (t *Transcoder) buildMainPlaylist(playlists []types.TranscoderPlaylist, out
 	}
 
 	log.Printf("[completed]: generating main playlist %s", mainPlaylistPath)
-	t.statusMgr.SendUpdate(t.taskID, types.StatusUpdate{Type: "progress", Message: "Master playlist generated."})
+	t.statusMgr.SendUpdate(t.taskID, types.StatusUpdate{Type: "completed", Message: "Master playlist generated."})
 	return true
 }

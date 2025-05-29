@@ -114,12 +114,23 @@ func handleTranscode(w http.ResponseWriter, r *http.Request) {
 
 			// Remove the task from StatusManager when it's completely done
 			statusManager.RemoveTask(taskID)
+			log.Printf("[%s] Task removed from status manager.", taskID)
 		}()
 
 		log.Printf("[%s] Starting transcoding for %s in background...", taskID, fileName)
 		startTime := time.Now()
 
 		transcoder := services.NewTranscoder(source, outputDir, statusManager, taskID)
+		if transcoder == nil {
+			// If transcoder is nil, it means initialization failed for some reason.
+			// We need to send a failure status and ensure the task is cleaned up.
+			errMsg := fmt.Sprintf("Failed to initialize transcoder for %s", fileName)
+			log.Printf("[%s] %s", taskID, errMsg)
+			statusManager.SendUpdate(taskID, types.StatusUpdate{
+				Type:    "failed",
+				Message: errMsg,
+			})
+		}
 		transcoder.Process()
 
 		elapsedTime := time.Since(startTime)
@@ -156,7 +167,7 @@ func handleTranscodeStatusStream(w http.ResponseWriter, r *http.Request) {
 	clientChan, err := statusManager.RegisterSubscriber(taskID)
 	if err != nil {
 		log.Printf("Error registering subscriber for task %s: %v", taskID, err)
-		http.Error(w, "Could not subscribe to task status", http.StatusInternalServerError)
+		http.Error(w, "Could not subscribe to task status. The task may have already completed or failed to start.", http.StatusInternalServerError)
 		return
 	}
 	// Deregister the client when this handler function returns
@@ -165,7 +176,13 @@ func handleTranscodeStatusStream(w http.ResponseWriter, r *http.Request) {
 	// Keep the connection open and send updates
 	for {
 		select {
-		case update := <-clientChan:
+		case update, ok := <-clientChan:
+			if !ok {
+				// Channel has been closed by StatusManager.RemoveTask, meaning the task is done.
+				log.Printf("[%s] Status channel closed by manager (task completed or removed). Client handler exiting for channel %p.", taskID, clientChan)
+				return // Exit loop, defer will call DeregisterSubscriber
+			}
+
 			// Marshal the update struct to JSON
 			jsonData, err := json.Marshal(update)
 			if err != nil {
@@ -174,7 +191,7 @@ func handleTranscodeStatusStream(w http.ResponseWriter, r *http.Request) {
 			}
 
 			// Send as an SSE event
-			_, err = fmt.Fprintf(w, "%s\n", jsonData)
+			_, err = fmt.Fprintf(w, "data: %s\n\n", jsonData)
 			if err != nil {
 				// Client disconnected or network error
 				log.Printf("[%s] Client disconnected or write error: %v", taskID, err)
