@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -20,7 +21,7 @@ const (
 	uploadDir         = "./uploads" // Directory to temporarily store uploaded videos
 	outputDir         = "./output"  // Directory for transcoded output
 	serverPort        = ":3000"     // Port for the API server
-	maxUploadSize     = 20          // Maximum upload size in MB
+	maxUploadSize     = 30          // Maximum upload size in MB
 	fileFormFieldName = "video"
 )
 
@@ -56,9 +57,25 @@ func handleTranscode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse multipart form data (for file upload)
-	err := r.ParseMultipartForm(maxUploadSize << 20) // Convert MB to bytes
+	// Wrap the request body with MaxBytesReader to enforce the upload size limit
+	// This limit applies to the entire request body.
+	r.Body = http.MaxBytesReader(w, r.Body, int64(maxUploadSize<<20)) // maxUploadSize in MB converted to bytes
+
+	// Parse multipart form data.
+	// The maxMemory argument for ParseMultipartForm now dictates how much of the form data
+	// (within the MaxBytesReader limit) is stored in memory before spooling to disk.
+	// It can be the same as maxUploadSize or smaller if you want to control in-memory usage more granularly.
+	err := r.ParseMultipartForm(int64(maxUploadSize << 20)) // Using maxUploadSize for in-memory buffer as well
 	if err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			// This error comes from http.MaxBytesReader
+			log.Printf("Upload failed: File exceeds maximum allowed size of %d MB. Actual size: %d bytes", maxUploadSize, maxBytesErr.Limit)
+			http.Error(w, fmt.Sprintf("Upload failed: File exceeds maximum allowed size of %d MB", maxUploadSize), http.StatusRequestEntityTooLarge)
+			return
+		}
+		// Handle other parsing errors
+		log.Printf("Failed to parse form: %v", err)
 		http.Error(w, fmt.Sprintf("Failed to parse form: %v", err), http.StatusBadRequest)
 		return
 	}
