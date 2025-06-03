@@ -9,7 +9,7 @@ It provides a RESTful API to accept video files and streams the transcoding prog
 - [x] Detects the resolution of the source video.
 - [x] Automatically transcodes the video to all lower resolutions in descending order.
 - [x] Streams the transcoding progress to the client using Server-Sent Events (SSE).
-- [ ] Supports multiple subscribers to the same transcoding job.
+- [x] Supports multiple subscribers to the same transcoding job.
 - [ ] Endpoint to cancel a transcoding job.
 - [ ] Way to retrieve the transcoded video files.
 - [ ] Security measures to prevent abuse.
@@ -67,3 +67,4 @@ curl -N http://localhost:3000/transcode/status/<task_id>
 - [x] User still connected after the transcoding process is completed
 - [x] User can connect to non-existent task IDs
 - [x] File size limit is not working
+- [x] Frame not showing sometimes in the transcoding progress
