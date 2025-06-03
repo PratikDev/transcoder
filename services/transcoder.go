@@ -174,7 +174,12 @@ func (t *Transcoder) transcode(
 	cmd := exec.Command("ffmpeg", args...)
 
 	log.Printf("[started]: transcoding %s for %s", resolution.String(), t.source.Filename)
-	t.statusMgr.SendUpdate(t.taskID, types.StatusUpdate{Type: "started", Message: fmt.Sprintf("Started %s transcoding", resolution.String())})
+	t.statusMgr.SendUpdate(t.taskID, types.StatusUpdate{Type: "started", Message: fmt.Sprintf("Started %s transcoding", resolution.String()), Data: types.TaskData{
+		Resolution: resolution.String(),
+		Timestamp:  0,
+		Frame:      "",
+		Progress:   0.0,
+	}})
 
 	// Capture stderr to a pipe for progress logging
 	stderrPipe, err := cmd.StderrPipe()
@@ -197,8 +202,7 @@ func (t *Transcoder) transcode(
 
 			// Basic progress parsing (can be more robust if needed)
 			if strings.Contains(line, "frame=") && strings.Contains(line, "time=") {
-				parts := strings.Fields(line)
-				frame, timemark, speed := utils.ParseFFmpegProgress(parts)
+				frame, timemark, speed := utils.ParseFFmpegProgress(line)
 				if timemark != "" {
 					timemarkParts := strings.Split(timemark, ":")
 					if len(timemarkParts) < 3 {
@@ -219,9 +223,14 @@ func (t *Transcoder) transcode(
 
 					log.Printf("[progress]: %s (%.2f%%)", msg, progressPercent)
 					t.statusMgr.SendUpdate(t.taskID, types.StatusUpdate{
-						Type:     "progress",
-						Message:  msg,
-						Progress: progressPercent,
+						Type:    "progress",
+						Message: msg,
+						Data: types.TaskData{
+							Resolution: resolution.String(),
+							Frame:      frame,
+							Timestamp:  int64(currentSeconds),
+							Progress:   progressPercent,
+						},
 					})
 				}
 			}
@@ -245,7 +254,12 @@ func (t *Transcoder) transcode(
 	}
 
 	log.Printf("[completed]: transcoding %s for %s; output %s", resolution.String(), t.source.Filename, outputPlaylist)
-	t.statusMgr.SendUpdate(t.taskID, types.StatusUpdate{Type: "completed", Message: fmt.Sprintf("Completed %s output generation.", resolution.String())})
+	t.statusMgr.SendUpdate(t.taskID, types.StatusUpdate{Type: "completed", Message: fmt.Sprintf("Completed %s output generation.", resolution.String()), Data: types.TaskData{
+		Resolution: resolution.String(),
+		Timestamp:  0,
+		Frame:      "",
+		Progress:   100.0, // Mark as complete
+	}})
 
 	detectedRes, err := utils.DetectPlaylistResolution(outputPlaylist)
 	if err != nil {

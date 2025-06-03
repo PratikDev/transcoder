@@ -7,10 +7,24 @@ import (
 	"log"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/PratikDev/transcoder/types"
+)
+
+// Pre-compile regex patterns for efficiency.
+// These will be used by ParseFFmpegProgress.
+var (
+	// frameRegex matches "frame= N" (or "frame=N") and captures N (the frame number).
+	frameRegex = regexp.MustCompile(`frame=\s*(\d+)`)
+
+	// timeRegex matches "time=HH:MM:SS.ms" and captures the timestamp string.
+	timeRegex = regexp.MustCompile(`time=\s*([\d:.]+)`)
+
+	// speedRegex matches "speed= N.Mx" and captures N.M (the speed multiplier).
+	speedRegex = regexp.MustCompile(`speed=\s*([\d.]+)x`)
 )
 
 // GetFilenameLessExt returns the filename without its extension.
@@ -23,18 +37,24 @@ func GetOutputFolderName(output string, fileName string) string {
 	return filepath.Join(output, GetFilenameLessExt(fileName))
 }
 
-// ParseFFmpegProgress parses the progress output from FFmpeg and returns the frame, time mark, and speed.
-func ParseFFmpegProgress(parts []string) (frame, timemark, speed string) {
-	for _, part := range parts {
-		switch {
-		case strings.HasPrefix(part, "frame="):
-			frame = strings.TrimPrefix(part, "frame=")
-		case strings.HasPrefix(part, "time="):
-			timemark = strings.TrimPrefix(part, "time=")
-		case strings.HasPrefix(part, "speed="):
-			speed = strings.TrimPrefix(part, "speed=")
-		}
+// ParseFFmpegProgress parses a single progress line string from FFmpeg's stderr
+// using regular expressions to extract frame, timemark, and speed.
+func ParseFFmpegProgress(line string) (frame, timemark, speed string) {
+	frameMatch := frameRegex.FindStringSubmatch(line)
+	if len(frameMatch) > 1 {
+		frame = frameMatch[1]
 	}
+
+	timeMatch := timeRegex.FindStringSubmatch(line)
+	if len(timeMatch) > 1 {
+		timemark = timeMatch[1]
+	}
+
+	speedMatch := speedRegex.FindStringSubmatch(line)
+	if len(speedMatch) > 1 {
+		speed = speedMatch[1]
+	}
+
 	return
 }
 
