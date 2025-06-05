@@ -191,3 +191,13 @@ func RemoveOutputDirectory(taskID string) error {
 
 	return nil
 }
+
+// CreateOutputDirectory creates an output directory for a given task ID. (e.g., /output/<task-id>)
+// It returns the path to the created directory or an error if it fails.
+func CreateOutputDirectory(taskID string) (string, error) {
+	outputDir := filepath.Join(OUTPUT_DIR, taskID)
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create output directory %s: %w", outputDir, err)
+	}
+	return outputDir, nil
+}

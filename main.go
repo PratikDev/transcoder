@@ -261,7 +261,7 @@ func handleCancelTranscode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, "Task %s cancelled successfully.", taskID)
+	fmt.Fprintf(w, "Task %s cancelled successfully.\n", taskID)
 }
 
 func handleServerStatus(w http.ResponseWriter, r *http.Request) {

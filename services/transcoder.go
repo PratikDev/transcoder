@@ -70,14 +70,11 @@ func (t *Transcoder) Process(ctx context.Context) {
 	item := t.source
 	t.statusMgr.SendUpdate(t.taskID, types.StatusUpdate{Type: "started", Message: fmt.Sprintf("Transcoding started for %s", item.Filename)})
 
-	// Get the output folder name from the task id and output dir name
-	// (e.g., /output/<task-id>)
-	outputFolder := filepath.Join(t.output, t.taskID)
-
-	// Make the output folder
-	if err := os.MkdirAll(outputFolder, 0755); err != nil {
-		log.Printf("[error]: failed to create output folder %s: %v", outputFolder, err)
-		t.statusMgr.SendUpdate(t.taskID, types.StatusUpdate{Type: "failed", Message: fmt.Sprintf("Failed to create output folder %s", outputFolder)})
+	// Create output directory for this task
+	outputFolder, err := utils.CreateOutputDirectory(t.taskID)
+	if err != nil {
+		log.Printf("[failed]: %v", err)
+		t.statusMgr.SendUpdate(t.taskID, types.StatusUpdate{Type: "failed", Message: fmt.Sprintf("Failed to create output directory for %s", item.Filename)})
 		return
 	}
 
