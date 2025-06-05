@@ -1,12 +1,14 @@
 package services
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"sync"
 	"time"
 
+	"github.com/PratikDev/transcoder/services/utils"
 	"github.com/PratikDev/transcoder/types"
 )
 
@@ -89,7 +91,10 @@ func (sm *StatusManager) SendUpdate(taskID string, update types.StatusUpdate) {
 	update.Timestamp = time.Now().UnixMilli() // Set timestamp for the update
 
 	// Update the last known status for this task
-	sm.tasks[taskID] = types.TaskStatus{LastUpdate: update}
+	// Only update the LastUpdate field, preserving other fields like Cancel
+	task := sm.tasks[taskID]
+	task.LastUpdate = update
+	sm.tasks[taskID] = task
 
 	// Iterate over all subscribers for this task and send the update
 	if chans, ok := sm.subscribers[taskID]; ok {
@@ -114,6 +119,14 @@ func (sm *StatusManager) RemoveTask(taskID string) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
+	// Clean up the cancel function if it exists to prevent memory leaks
+	if task, ok := sm.tasks[taskID]; ok {
+		if task.Cancel != nil {
+			// This is good practice although the context is likely already done.
+			task.Cancel()
+		}
+	}
+
 	delete(sm.tasks, taskID)
 	// Subscribers should ideally be handled by DeregisterSubscriber, but this ensures cleanup
 	if chans, ok := sm.subscribers[taskID]; ok {
@@ -123,4 +136,53 @@ func (sm *StatusManager) RemoveTask(taskID string) {
 		delete(sm.subscribers, taskID)
 	}
 	log.Printf("Task %s and its status/subscribers removed.", taskID)
+}
+
+// CancelTask finds the cancel function for a task and executes it.
+func (sm *StatusManager) CancelTask(taskID string) error {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	task, ok := sm.tasks[taskID]
+	if !ok {
+		return fmt.Errorf("task %s not found", taskID)
+	}
+
+	// Check if the cancel function is not registered
+	// This is a safeguard; ideally, the cancel function should always be set
+	// when the task is created
+	if task.Cancel == nil {
+		return fmt.Errorf("no cancel function registered for task %s", taskID)
+	}
+
+	task.Cancel() // Execute the context cancel function
+	log.Printf("Cancellation signal sent for task: %s", taskID)
+
+	// remove the output directory for this task
+	if err := utils.RemoveOutputDirectory(taskID); err != nil {
+		errMsg := fmt.Sprintf("failed to remove output directory for task %s: %v", taskID, err)
+		log.Println(errMsg)
+		return fmt.Errorf("%s", errMsg)
+	}
+
+	return nil
+}
+
+// StoreCancelFunc stores the cancel function for a given taskID.
+func (sm *StatusManager) StoreCancelFunc(taskID string, cancel context.CancelFunc) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	// It's possible the first status update hasn't happened yet,
+	// so we ensure the task entry exists.
+	if task, ok := sm.tasks[taskID]; ok {
+		log.Printf("Storing cancel function for task: %s", taskID)
+
+		task.Cancel = cancel
+		sm.tasks[taskID] = task
+	} else {
+		log.Printf("Creating new task entry for cancel function: %s", taskID)
+
+		sm.tasks[taskID] = types.TaskStatus{Cancel: cancel}
+	}
 }

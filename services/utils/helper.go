@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -27,14 +28,14 @@ var (
 	speedRegex = regexp.MustCompile(`speed=\s*([\d.]+)x`)
 )
 
+const (
+	UPLOAD_DIR = "./uploads" // Directory to temporarily store uploaded videos
+	OUTPUT_DIR = "./output"  // Directory for transcoded output
+)
+
 // GetFilenameLessExt returns the filename without its extension.
 func GetFilenameLessExt(fileName string) string {
 	return strings.TrimSuffix(fileName, strings.ToLower(filepath.Ext(fileName)))
-}
-
-// GetOutputFolderName constructs the output folder path based on the output directory and the filename without extension.
-func GetOutputFolderName(output string, fileName string) string {
-	return filepath.Join(output, GetFilenameLessExt(fileName))
 }
 
 // ParseFFmpegProgress parses a single progress line string from FFmpeg's stderr
@@ -179,4 +180,14 @@ func GetTargetResolutions(resolution types.Resolutions) []types.Resolutions {
 		}
 	}
 	return availableResolutions
+}
+
+// RemoveOutputDirectory removes the output directory for a given task ID.
+func RemoveOutputDirectory(taskID string) error {
+	outputDir := filepath.Join(OUTPUT_DIR, taskID)
+	if err := os.RemoveAll(outputDir); err != nil {
+		return fmt.Errorf("failed to remove output directory %s: %w", outputDir, err)
+	}
+
+	return nil
 }

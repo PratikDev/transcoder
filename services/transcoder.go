@@ -3,6 +3,8 @@ package services
 import (
 	"bufio"
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -27,7 +29,7 @@ type Transcoder struct {
 }
 
 // NewTranscoder creates a new Transcoder instance.
-func NewTranscoder(source types.TranscoderSource, output string, statusMgr *StatusManager, taskID string) *Transcoder {
+func NewTranscoder(source types.TranscoderSource, outputDir string, statusMgr *StatusManager, taskID string) *Transcoder {
 	// Get video resolution
 	vidResolution, err := utils.DetectVideoResolution(source.File)
 	if err != nil {
@@ -56,7 +58,7 @@ func NewTranscoder(source types.TranscoderSource, output string, statusMgr *Stat
 	return &Transcoder{
 		source:        source,
 		resolutions:   targetResolutions,
-		output:        output,
+		output:        outputDir,
 		statusMgr:     statusMgr,
 		taskID:        taskID,
 		inputDuration: inputDuration,
@@ -64,12 +66,13 @@ func NewTranscoder(source types.TranscoderSource, output string, statusMgr *Stat
 }
 
 // Process starts the transcoding process for the source video.
-func (t *Transcoder) Process() {
+func (t *Transcoder) Process(ctx context.Context) {
 	item := t.source
 	t.statusMgr.SendUpdate(t.taskID, types.StatusUpdate{Type: "started", Message: fmt.Sprintf("Transcoding started for %s", item.Filename)})
 
-	// Get the output folder name from the file and output dir name
-	outputFolder := utils.GetOutputFolderName(t.output, item.Filename)
+	// Get the output folder name from the task id and output dir name
+	// (e.g., /output/<task-id>)
+	outputFolder := filepath.Join(t.output, t.taskID)
 
 	// Make the output folder
 	if err := os.MkdirAll(outputFolder, 0755); err != nil {
@@ -78,10 +81,16 @@ func (t *Transcoder) Process() {
 		return
 	}
 
-	success := t.transcodeResolutions(outputFolder)
+	success := t.transcodeResolutions(ctx, outputFolder)
 	if !success {
-		log.Printf("[failed]: transcoding for %s failed", item.Filename)
-		t.statusMgr.SendUpdate(t.taskID, types.StatusUpdate{Type: "failed", Message: fmt.Sprintf("Transcoding failed for %s", item.Filename)})
+		// Check if the context was cancelled.
+		if ctx.Err() == context.Canceled {
+			log.Printf("[cancelled]: Transcoding for %s was cancelled by user.", item.Filename)
+			t.statusMgr.SendUpdate(t.taskID, types.StatusUpdate{Type: "cancelled", Message: fmt.Sprintf("Transcoding cancelled for %s", item.Filename)})
+		} else {
+			log.Printf("[failed]: Transcoding for %s failed.", item.Filename)
+			t.statusMgr.SendUpdate(t.taskID, types.StatusUpdate{Type: "failed", Message: fmt.Sprintf("Transcoding failed for %s", item.Filename)})
+		}
 		return
 	}
 
@@ -89,7 +98,7 @@ func (t *Transcoder) Process() {
 }
 
 // transcodeResolutions transcodes the source video into multiple resolutions.
-func (t *Transcoder) transcodeResolutions(outputFolder string) bool {
+func (t *Transcoder) transcodeResolutions(ctx context.Context, outputFolder string) bool {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	playlistChan := make(chan types.TranscoderPlaylist, len(t.resolutions))
@@ -101,8 +110,15 @@ func (t *Transcoder) transcodeResolutions(outputFolder string) bool {
 		go func(res types.Resolutions) {
 			defer wg.Done()
 
-			playlist, err := t.transcode(res, outputFolder)
+			playlist, err := t.transcode(ctx, res, outputFolder)
 			if err != nil {
+				// Check if the error was due to the context being canceled.
+				if errors.Is(err, context.Canceled) {
+					log.Printf("[cancelled]: Transcoding %s was cancelled.", res.String())
+					// Don't treat cancellation as a regular error that sets the errorOccurred flag.
+					return
+				}
+
 				log.Printf("[skipping]: %s for %s; %v", res.String(), t.source.Filename, err)
 				mu.Lock()
 				errorOccurred = true
@@ -120,6 +136,12 @@ func (t *Transcoder) transcodeResolutions(outputFolder string) bool {
 	wg.Wait()
 	close(playlistChan)
 
+	// After waiting, check if the context was cancelled. If so, the entire operation
+	// is considered unsuccessful, and we should not proceed.
+	if ctx.Err() == context.Canceled {
+		return false
+	}
+
 	if errorOccurred {
 		return false // If any transcoding failed, consider the whole process failed
 	}
@@ -129,11 +151,18 @@ func (t *Transcoder) transcodeResolutions(outputFolder string) bool {
 		resolutionPlaylists = append(resolutionPlaylists, playlist)
 	}
 
+	// If no playlists were generated,
+	// don't build the main playlist.
+	if len(resolutionPlaylists) == 0 {
+		return false
+	}
+
 	return t.buildMainPlaylist(resolutionPlaylists, outputFolder)
 }
 
 // transcode transcodes the video to a specific resolution and generates an HLS playlist.
 func (t *Transcoder) transcode(
+	ctx context.Context,
 	resolution types.Resolutions,
 	outputFolder string,
 ) (*types.TranscoderPlaylist, error) {
@@ -171,7 +200,7 @@ func (t *Transcoder) transcode(
 		outputPlaylist,
 	}
 
-	cmd := exec.Command("ffmpeg", args...)
+	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
 
 	log.Printf("[started]: transcoding %s for %s", resolution.String(), t.source.Filename)
 	t.statusMgr.SendUpdate(t.taskID, types.StatusUpdate{Type: "started", Message: fmt.Sprintf("Started %s transcoding", resolution.String()), Data: types.TaskData{
@@ -246,6 +275,14 @@ func (t *Transcoder) transcode(
 	wgOutput.Wait() // Wait for stdout and stderr scanners to finish reading
 	err = cmd.Wait()
 	if err != nil {
+		// Check if the error is because the context was cancelled.
+		if ctx.Err() == context.Canceled {
+			errMsg := fmt.Sprintf("transcoding %s cancelled for %s", resolution.String(), t.source.Filename)
+			log.Println(errMsg)
+			// Return a specific error or nil, signaling cancellation.
+			return nil, ctx.Err()
+		}
+
 		// Now you can safely use totalStderr.String() to get all captured stderr
 		errMsg := fmt.Sprintf("[ffmpeg error]: transcoding %s failed for %s: %v, stderr: %s",
 			resolution.String(), t.source.Filename, err, totalStderr.String())

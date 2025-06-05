@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,15 +14,14 @@ import (
 	"time"
 
 	"github.com/PratikDev/transcoder/services"
+	"github.com/PratikDev/transcoder/services/utils"
 	"github.com/PratikDev/transcoder/types"
 	"github.com/google/uuid"
 )
 
 const (
-	uploadDir         = "./uploads" // Directory to temporarily store uploaded videos
-	outputDir         = "./output"  // Directory for transcoded output
-	serverPort        = ":3000"     // Port for the API server
-	maxUploadSize     = 30          // Maximum upload size in MB
+	serverPort        = ":3000" // Port for the API server
+	maxUploadSize     = 30      // Maximum upload size in MB
 	fileFormFieldName = "video"
 )
 
@@ -36,16 +36,17 @@ func init() {
 
 func main() {
 	// Create upload and output directories if they don't exist
-	if err := os.MkdirAll(uploadDir, 0755); err != nil {
-		log.Fatalf("Failed to create upload directory %s: %v", uploadDir, err)
+	if err := os.MkdirAll(utils.UPLOAD_DIR, 0755); err != nil {
+		log.Fatalf("Failed to create upload directory %s: %v", utils.UPLOAD_DIR, err)
 	}
-	if err := os.MkdirAll(outputDir, 0755); err != nil {
-		log.Fatalf("Failed to create output directory %s: %v", outputDir, err)
+	if err := os.MkdirAll(utils.OUTPUT_DIR, 0755); err != nil {
+		log.Fatalf("Failed to create output directory %s: %v", utils.OUTPUT_DIR, err)
 	}
 
-	http.HandleFunc("/transcode", handleTranscode)
+	http.HandleFunc("/transcode", handleTranscode)                     // Main transcoding endpoint
 	http.HandleFunc("/transcode/status/", handleTranscodeStatusStream) // SSE endpoint
-	http.HandleFunc("/status", handleServerStatus)                     // Optional: for checking server health
+	http.HandleFunc("/transcode/jobs/", handleCancelTranscode)         // Endpoint to cancel a transcoding job
+	http.HandleFunc("/status", handleServerStatus)                     // For checking server health
 
 	log.Printf("Server starting on port %s", serverPort)
 	log.Fatal(http.ListenAndServe(serverPort, nil))
@@ -87,13 +88,13 @@ func handleTranscode(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
+	taskID := uuid.New().String()
+
 	// Extract file info
 	fileName := header.Filename
 	extName := strings.ToLower(filepath.Ext(fileName))
-	baseName := strings.TrimSuffix(fileName, extName)
-	epochMillis := time.Now().UnixNano()
-	uniqueFileName := fmt.Sprintf("%s_%d%s", baseName, epochMillis, extName)
-	tempFilePath := filepath.Join(uploadDir, uniqueFileName)
+	uniqueFileName := fmt.Sprintf("%s%s", taskID, extName)
+	tempFilePath := filepath.Join(utils.UPLOAD_DIR, uniqueFileName)
 
 	// Save the uploaded file temporarily
 	dst, err := os.Create(tempFilePath)
@@ -107,10 +108,6 @@ func handleTranscode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	taskID := uuid.New().String()
-
-	log.Printf("Received file: %s, saved to %s. Assigned Task ID: %s", fileName, tempFilePath, taskID)
-
 	// Prepare TranscoderSource
 	source := types.TranscoderSource{
 		File:     tempFilePath,
@@ -118,11 +115,20 @@ func handleTranscode(w http.ResponseWriter, r *http.Request) {
 		Extname:  extName,
 	}
 
+	// Create a new context that can be cancelled.
+	ctx, cancelFunc := context.WithCancel(context.Background())
+
+	// Store the cancel function in the status manager, keyed by taskID.
+	statusManager.StoreCancelFunc(taskID, cancelFunc)
+
+	log.Printf("Received file: %s, saved to %s. Assigned Task ID: %s", fileName, tempFilePath, taskID)
+
 	// Initiate transcoding in a goroutine (non-blocking)
-	go func() {
+	go func(ctx context.Context, currentTaskID string, currentTempFilePath string, currentFileName string) {
 		// This defer ensures the temp file is removed after the goroutine finishes,
 		// regardless of whether transcoding succeeded or failed.
 		defer func() {
+			cancelFunc() // Ensure context resources are freed
 			if err := os.Remove(tempFilePath); err != nil {
 				log.Printf("[%s] Error removing temporary file %s: %v", taskID, tempFilePath, err)
 			} else {
@@ -137,7 +143,7 @@ func handleTranscode(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[%s] Starting transcoding for %s in background...", taskID, fileName)
 		startTime := time.Now()
 
-		transcoder := services.NewTranscoder(source, outputDir, statusManager, taskID)
+		transcoder := services.NewTranscoder(source, utils.OUTPUT_DIR, statusManager, taskID)
 		if transcoder == nil {
 			// If transcoder is nil, it means initialization failed for some reason.
 			// We need to send a failure status and ensure the task is cleaned up.
@@ -148,11 +154,11 @@ func handleTranscode(w http.ResponseWriter, r *http.Request) {
 				Message: errMsg,
 			})
 		}
-		transcoder.Process()
+		transcoder.Process(ctx)
 
 		elapsedTime := time.Since(startTime)
 		log.Printf("[%s] Transcoding for %s completed. Total time: %s", taskID, fileName, elapsedTime)
-	}()
+	}(ctx, taskID, tempFilePath, fileName)
 
 	response := map[string]any{
 		"message":         fmt.Sprintf("Transcoding of %s started successfully.", fileName),
@@ -230,6 +236,32 @@ func handleTranscodeStatusStream(w http.ResponseWriter, r *http.Request) {
 			return // Exit the loop and close handler
 		}
 	}
+}
+
+func handleCancelTranscode(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "DELETE" {
+		http.Error(w, "Only DELETE requests are allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	taskID := strings.TrimPrefix(r.URL.Path, "/transcode/jobs/")
+	if taskID == "" {
+		http.Error(w, "Task ID is required", http.StatusBadRequest)
+		return
+	}
+
+	log.Printf("Received cancellation request for Task ID: %s", taskID)
+
+	err := statusManager.CancelTask(taskID)
+	if err != nil {
+		log.Printf("Failed to cancel task %s: %v", taskID, err)
+		// We send a 404 Not Found if the task doesn't exist to be cancelled.
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, "Task %s cancelled successfully.", taskID)
 }
 
 func handleServerStatus(w http.ResponseWriter, r *http.Request) {

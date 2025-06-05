@@ -3,7 +3,7 @@ CONTAINER_NAME=transcoder
 SERVER_PORT=3000
 BASE_COMMAND=sudo docker
 
-.PHONY: build run go clean
+.PHONY: build run go enter clean
 
 build:
 	$(BASE_COMMAND) build -t $(IMAGE_NAME) .
@@ -13,6 +13,9 @@ run:
 
 go:
 	@$(MAKE) build && clear && $(MAKE) run
+
+enter:
+	$(BASE_COMMAND) exec -it $(CONTAINER_NAME) /bin/sh
 
 clean:
 	-$(BASE_COMMAND) rm -f $(CONTAINER_NAME)
