@@ -92,6 +92,38 @@ func (t *Transcoder) Process(ctx context.Context) {
 	}
 
 	log.Printf("[finished]: %s file successfully processed", item.Filename)
+
+	// Define the path for the output zip file.
+	zipFilePath := outputFolder + ".zip"
+	log.Printf("[%s] Zipping output folder %s to %s", t.taskID, outputFolder, zipFilePath)
+	t.statusMgr.SendUpdate(t.taskID, types.StatusUpdate{
+		Type:    "progress",
+		Message: "Archiving transcoded files...",
+	})
+
+	err = utils.ZipOutputFolder(outputFolder, zipFilePath)
+	if err != nil {
+		log.Printf("[%s] Failed to zip output folder: %v", t.taskID, err)
+		t.statusMgr.SendUpdate(t.taskID, types.StatusUpdate{
+			Type:    "failed",
+			Message: fmt.Sprintf("Failed to archive files: %v", err),
+		})
+		return
+	}
+
+	log.Printf("[%s] Successfully created zip archive: %s", t.taskID, zipFilePath)
+
+	// Output folder cleanup
+	if err := os.RemoveAll(outputFolder); err != nil {
+		log.Printf("[%s] Warning: Failed to clean up output folder %s: %v", t.taskID, outputFolder, err)
+	}
+
+	// Send a final "completed" status update.
+	t.statusMgr.SendUpdate(t.taskID, types.StatusUpdate{
+		Type:    "completed",
+		Message: "Transcoding and archiving complete. Your download is ready.",
+	})
+
 }
 
 // transcodeResolutions transcodes the source video into multiple resolutions.

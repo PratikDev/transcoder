@@ -1,9 +1,11 @@
 package utils
 
 import (
+	"archive/zip"
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -200,4 +202,52 @@ func CreateOutputDirectory(taskID string) (string, error) {
 		return "", fmt.Errorf("failed to create output directory %s: %w", outputDir, err)
 	}
 	return outputDir, nil
+}
+
+// ZipOutputFolder creates a zip archive from a source directory.
+func ZipOutputFolder(srcPath string, destZipPath string) error {
+	zipFile, err := os.Create(destZipPath)
+	if err != nil {
+		return err
+	}
+	defer zipFile.Close()
+
+	zipWriter := zip.NewWriter(zipFile)
+	defer zipWriter.Close()
+
+	return filepath.Walk(srcPath, func(filePath string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil // Skip directories
+		}
+
+		// Create a proper relative path for the file inside the zip archive.
+		relPath, err := filepath.Rel(srcPath, filePath)
+		if err != nil {
+			return err
+		}
+
+		zipFileHeader, err := zip.FileInfoHeader(info)
+		if err != nil {
+			return err
+		}
+		zipFileHeader.Name = relPath
+		zipFileHeader.Method = zip.Deflate // Use compression
+
+		writer, err := zipWriter.CreateHeader(zipFileHeader)
+		if err != nil {
+			return err
+		}
+
+		fileToZip, err := os.Open(filePath)
+		if err != nil {
+			return err
+		}
+		defer fileToZip.Close()
+
+		_, err = io.Copy(writer, fileToZip)
+		return err
+	})
 }

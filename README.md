@@ -11,6 +11,7 @@ It provides a RESTful API to accept video files and streams the transcoding prog
 - [x] Streams the transcoding progress to the client using Server-Sent Events (SSE).
 - [x] Supports multiple subscribers to the same transcoding job.
 - [x] Endpoint to cancel a transcoding job.
+- [x] Zip the transcoded video files and store that instead of individual files.
 - [ ] Way to retrieve the transcoded video files.
 - [ ] Security measures to prevent abuse.
 
