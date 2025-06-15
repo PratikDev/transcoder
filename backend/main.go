@@ -53,6 +53,17 @@ func main() {
 }
 
 func handleTranscode(w http.ResponseWriter, r *http.Request) {
+	// Set CORS headers for all requests to this endpoint
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+	// Handle preflight (OPTIONS) request
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
 	if r.Method != "POST" {
 		http.Error(w, "Only POST requests are allowed", http.StatusMethodNotAllowed)
 		return
@@ -83,6 +94,7 @@ func handleTranscode(w http.ResponseWriter, r *http.Request) {
 
 	file, header, err := r.FormFile(fileFormFieldName)
 	if err != nil {
+		log.Printf("Failed to get video file from form: %v", err)
 		http.Error(w, fmt.Sprintf("Failed to get video file from form: %v", err), http.StatusBadRequest)
 		return
 	}
@@ -174,6 +186,7 @@ func handleTranscodeStatusStream(w http.ResponseWriter, r *http.Request) {
 	// Extract taskID from the URL path
 	taskID := strings.TrimPrefix(r.URL.Path, "/transcode/status/")
 	if taskID == "" {
+		log.Println("Task ID is required for status stream")
 		http.Error(w, "Task ID is required", http.StatusBadRequest)
 		return
 	}
@@ -246,6 +259,7 @@ func handleCancelTranscode(w http.ResponseWriter, r *http.Request) {
 
 	taskID := strings.TrimPrefix(r.URL.Path, "/transcode/jobs/")
 	if taskID == "" {
+		log.Println("Task ID is required for cancellation")
 		http.Error(w, "Task ID is required", http.StatusBadRequest)
 		return
 	}
